@@ -3,8 +3,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
-
 export default function PrescriptionPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -16,13 +14,45 @@ export default function PrescriptionPage() {
   const [order, setOrder] = useState<any>(null);
 
   async function load() {
-    const res = await fetch(`${API_BASE}/v1/prescriptions/${id}`);
+    const res = await fetch(`/v1/prescriptions/${id}`);
     if (!res.ok) throw new Error(await res.text());
-    setData(await res.json());
+    const json = await res.json();
+    setData(json);
+    return json;
   }
 
   useEffect(() => {
-    void load().catch((e) => setError(e instanceof Error ? e.message : 'Failed'));
+    let alive = true;
+    let attempts = 0;
+
+    const tick = async () => {
+      if (!alive) return;
+      attempts += 1;
+
+      try {
+        const json = await load();
+
+        if (json?.status === 'EXTRACTION_FAILED' && !error) {
+          const message = json?.extraction?.error?.message;
+          if (message) setError(String(message));
+        }
+
+        // Max ~3 minutes (90 * 2s) to avoid infinite polling.
+        if (attempts >= 90) return;
+
+        if (json?.status === 'EXTRACTING' || json?.status === 'UPLOADED') {
+          setTimeout(() => void tick(), 2000);
+        }
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : 'Failed');
+      }
+    };
+
+    void tick();
+
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -30,7 +60,7 @@ export default function PrescriptionPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/prescriptions/${id}/confirm`, { method: 'POST' });
+      const res = await fetch(`/v1/prescriptions/${id}/confirm`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
       await load();
     } catch (e) {
@@ -45,7 +75,7 @@ export default function PrescriptionPage() {
     setError(null);
     setOrder(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/orders/cod`, {
+      const res = await fetch(`/v1/orders/cod`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ prescriptionId: id })
@@ -82,6 +112,7 @@ export default function PrescriptionPage() {
   const statusColors: Record<string, string> = {
     UPLOADED: 'bg-blue-100 text-blue-800',
     EXTRACTED: 'bg-purple-100 text-purple-800',
+    EXTRACTION_FAILED: 'bg-red-100 text-red-800',
     CONFIRMED: 'bg-green-100 text-green-800',
     PLACED_WITH_PHARMACY: 'bg-green-100 text-green-800'
   };
@@ -127,7 +158,9 @@ export default function PrescriptionPage() {
           </svg>
           Extracted Medications
         </h3>
-        {medications.length > 0 ? (
+        {data.status === 'EXTRACTING' ? (
+          <p className="text-gray-500 text-sm">Extracting… this may take up to a minute.</p>
+        ) : medications.length > 0 ? (
           <div className="space-y-3">
             {medications.map((med: any, idx: number) => (
               <div key={idx} className="bg-gray-50 rounded-lg p-4 border border-gray-200">

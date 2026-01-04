@@ -126,3 +126,9 @@ out/
 .docusaurus
 
 .svelte-kit
+
+# Large local datasets (do not commit)
+dummy websites/medicines.csv
+
+# Third-party demo/clone content (contains credentials)
+dummy websites/1mg-clone-main/

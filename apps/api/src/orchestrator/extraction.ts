@@ -9,41 +9,89 @@ export async function orchestrateExtraction(input: { prescriptionId: string }) {
   const pres = presSnap.data();
   if (!pres) throw new Error('Prescription not found');
 
-  const uploadSnap = await db.collection(collections.uploads).doc(String(pres.uploadId)).get();
-  const upload = uploadSnap.data();
-  if (!upload) throw new Error('Upload not found');
-
-  const extracted = await runPrescriptionExtraction({
-    uploadPath: String(upload.storagePath),
-    mimeType: String(upload.mimeType),
-    filename: String(upload.filename)
+  await presRef.update({
+    updatedAt: Timestamp.now(),
+    status: 'EXTRACTING'
   });
 
-  // One extraction doc per prescription (id = prescriptionId)
+  // Ensure an extraction doc exists immediately so the UI can track progress.
   const extractionRef = db.collection(collections.extractions).doc(input.prescriptionId);
   await extractionRef.set(
     {
       createdAt: Timestamp.now(),
       prescriptionId: input.prescriptionId,
-      rawJson: extracted.json,
-      confidence: extracted.confidence,
-      source: extracted.source
+      status: 'STARTED',
+      rawJson: null,
+      confidence: null,
+      source: null,
+      error: null
     },
     { merge: true }
   );
 
-  await presRef.update({
-    updatedAt: Timestamp.now(),
-    status: 'EXTRACTED'
-  });
+  const uploadSnap = await db.collection(collections.uploads).doc(String(pres.uploadId)).get();
+  const upload = uploadSnap.data();
+  if (!upload) throw new Error('Upload not found');
 
-  const auditRef = db.collection(collections.auditEvents).doc();
-  await auditRef.set({
-    createdAt: Timestamp.now(),
-    prescriptionId: input.prescriptionId,
-    action: 'EXTRACTION_COMPLETED',
-    metadata: extracted.json
-  });
+  try {
+    const extracted = await runPrescriptionExtraction({
+      uploadPath: String(upload.storagePath),
+      mimeType: String(upload.mimeType),
+      filename: String(upload.filename)
+    });
 
-  return { extractionId: extractionRef.id, extraction: extracted.json };
+    await extractionRef.set(
+      {
+        updatedAt: Timestamp.now(),
+        rawJson: extracted.json,
+        confidence: extracted.confidence,
+        source: extracted.source,
+        status: 'COMPLETED',
+        error: null
+      },
+      { merge: true }
+    );
+
+    await presRef.update({
+      updatedAt: Timestamp.now(),
+      status: 'EXTRACTED'
+    });
+
+    const auditRef = db.collection(collections.auditEvents).doc();
+    await auditRef.set({
+      createdAt: Timestamp.now(),
+      prescriptionId: input.prescriptionId,
+      action: 'EXTRACTION_COMPLETED',
+      metadata: extracted.json
+    });
+
+    return { extractionId: extractionRef.id, extraction: extracted.json };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : null;
+
+    await extractionRef.set(
+      {
+        updatedAt: Timestamp.now(),
+        status: 'FAILED',
+        error: { message, stack }
+      },
+      { merge: true }
+    );
+
+    await presRef.update({
+      updatedAt: Timestamp.now(),
+      status: 'EXTRACTION_FAILED'
+    });
+
+    const auditRef = db.collection(collections.auditEvents).doc();
+    await auditRef.set({
+      createdAt: Timestamp.now(),
+      prescriptionId: input.prescriptionId,
+      action: 'EXTRACTION_FAILED',
+      metadata: { message, stack }
+    });
+
+    throw err;
+  }
 }

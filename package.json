@@ -6,12 +6,27 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm run -ws dev",
+    "dev": "npm run dev:all",
+    "dev:all": "concurrently -k -n api,web -c cyan,magenta \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:api": "node ./node_modules/tsx/dist/cli.mjs watch ./apps/api/src/index.ts",
     "build": "npm run -ws build",
     "lint": "npm run -ws lint",
     "typecheck": "npm run -ws typecheck"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "next": "15.5.7",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "@next/swc-win32-x64-msvc": "15.5.7",
+    "tailwindcss": "3.4.17",
+    "postcss": "8.4.49",
+    "autoprefixer": "10.4.20",
+    "tsx": "4.19.2",
+    "typescript": "5.5.4",
+    "concurrently": "9.1.2"
   }
 }

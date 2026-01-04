@@ -4,6 +4,7 @@ export function isAllowedPrescriptionMimeType(mimeType: string) {
     mt === 'application/pdf' ||
     mt === 'image/png' ||
     mt === 'image/jpeg' ||
-    mt === 'image/jpg'
+    mt === 'image/jpg' ||
+    mt === 'text/plain'
   );
 }

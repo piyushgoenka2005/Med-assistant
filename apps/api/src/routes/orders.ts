@@ -90,7 +90,12 @@ export async function orderRoutes(app: FastifyInstance) {
       metadata: { orderId: orderRef.id, vendor, vendorOrderId }
     });
 
-    await scheduleDefaultReminders({ prescriptionId: body.prescriptionId, cartId: body.prescriptionId });
+    try {
+      await scheduleDefaultReminders({ prescriptionId: body.prescriptionId, cartId: body.prescriptionId });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return reply.badRequest(`Google Calendar reminder scheduling failed: ${msg}`);
+    }
 
     return reply.send({ order });
   });

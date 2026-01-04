@@ -49,6 +49,10 @@ export async function prescriptionRoutes(app: FastifyInstance) {
     if (!extractionSnap.exists) return reply.badRequest('Extraction missing');
     const extractionDoc = extractionSnap.data();
 
+    if (!extractionDoc?.rawJson || extractionDoc?.status !== 'COMPLETED') {
+      return reply.badRequest('Extraction not completed yet');
+    }
+
     const extracted = PrescriptionExtractionSchema.parse(extractionDoc?.rawJson);
 
     const cart = await buildCartFromExtraction({

@@ -14,5 +14,6 @@ await app.register(multipart);
 await registerRoutes(app);
 
 app.get('/health', async () => ({ ok: true }));
+app.get('/v1/health', async () => ({ ok: true }));
 
 await app.listen({ port: env.API_PORT, host: '0.0.0.0' });

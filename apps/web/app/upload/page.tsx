@@ -32,7 +32,7 @@ export default function UploadPage() {
       form.append('dob', dob);
       form.append('phoneNumber', phoneNumber);
       form.append('emailId', emailId);
-      const res = await fetch(`${API_BASE}/v1/uploads/prescription`, {
+      const res = await fetch(`/v1/uploads/prescription`, {
         method: 'POST',
         body: form
       });
@@ -40,7 +40,14 @@ export default function UploadPage() {
       const data = await res.json();
       router.push(`/prescriptions/${data.prescriptionId}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
+      if (err instanceof TypeError) {
+        setError(
+          `Could not reach API at ${API_BASE}. ` +
+            `Make sure the API server is running (repo root: npm run dev:api).`
+        );
+      } else {
+        setError(err instanceof Error ? err.message : 'Upload failed');
+      }
     } finally {
       setBusy(false);
     }
@@ -72,7 +79,7 @@ export default function UploadPage() {
                   <span>Upload a file</span>
                   <input
                     type="file"
-                    accept="application/pdf,image/png,image/jpeg"
+                    accept="application/pdf,image/png,image/jpeg,text/plain"
                     onChange={(e) => setFile(e.target.files?.[0] ?? null)}
                     className="sr-only"
                   />
