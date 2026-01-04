@@ -21,45 +21,63 @@ export async function orderRoutes(app: FastifyInstance) {
     const extractionSnap = await db.collection(collections.extractions).doc(body.prescriptionId).get();
     if (!extractionSnap.exists) return reply.badRequest('Extraction missing');
     const extractionDoc = extractionSnap.data();
+
+    const cartSnap = await db.collection(collections.carts).doc(body.prescriptionId).get();
+    const preferredVendorId = cartSnap.exists ? (cartSnap.data() as any)?.preferredVendorId : null;
     const refreshedCart = await buildCartFromExtraction({
       prescriptionId: body.prescriptionId,
-      extractionJson: extractionDoc?.rawJson
+      extractionJson: extractionDoc?.rawJson,
+      preferredVendorId: preferredVendorId ?? null
     });
 
     if (refreshedCart?.status !== 'CONFIRMED') return reply.badRequest('Cart not confirmed');
 
     const paymentId = `cod_${crypto.randomUUID()}`;
 
-    // Place the purchase with the selected dummy vendor, and record vendor order history.
-    const vendor = String((refreshedCart as any).vendor ?? 'site-a');
     const pricing = (refreshedCart as any).pricing ?? {};
     const items = Array.isArray((refreshedCart as any).items) ? (refreshedCart as any).items : [];
+    const vendorsUsed = Array.isArray((refreshedCart as any).vendorsUsed)
+      ? (refreshedCart as any).vendorsUsed.map(String)
+      : [String((refreshedCart as any).vendor ?? 'site-a')];
 
-    let vendorOrderId: string | null = null;
-    try {
-      const purchaseRes = await fetch(
-        `http://127.0.0.1:${env.API_PORT}/dummy/${encodeURIComponent(vendor)}/purchase`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            prescriptionId: body.prescriptionId,
-            cartId: body.prescriptionId,
-            currency: String(pricing.currency ?? 'INR'),
-            deliveryFee: Number(pricing.deliveryFee ?? 0),
-            total: Number(pricing.total ?? 0),
-            items: items.map((it: any) => ({
-              name: String(it.name ?? ''),
-              quantity: Number(it.quantity ?? 1),
-              unitPrice: Number(it.unitPrice ?? 0)
-            }))
-          })
-        }
-      );
-      const purchaseOut = purchaseRes.ok ? ((await purchaseRes.json()) as any) : null;
-      vendorOrderId = purchaseOut?.vendorOrderId ?? null;
-    } catch {
-      vendorOrderId = null;
+    // Place purchases per vendor (supports fallback split orders).
+    const itemsByVendor = new Map<string, any[]>();
+    for (const it of items) {
+      const v = String(it.vendor ?? vendorsUsed[0] ?? 'site-a');
+      if (!itemsByVendor.has(v)) itemsByVendor.set(v, []);
+      itemsByVendor.get(v)!.push(it);
+    }
+
+    const vendorOrders: Array<{ vendor: string; vendorOrderId: string | null }> = [];
+    for (const [vendor, vendorItems] of itemsByVendor.entries()) {
+      let vendorOrderId: string | null = null;
+      try {
+        const purchaseRes = await fetch(
+          `http://127.0.0.1:${env.API_PORT}/dummy/${encodeURIComponent(vendor)}/purchase`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              prescriptionId: body.prescriptionId,
+              cartId: body.prescriptionId,
+              currency: String(pricing.currency ?? 'INR'),
+              deliveryFee: 0,
+              total: Number(pricing.total ?? 0),
+              items: vendorItems.map((it: any) => ({
+                name: String(it.name ?? ''),
+                quantity: Number(it.quantity ?? 1),
+                unitPrice: Number(it.unitPrice ?? 0)
+              }))
+            })
+          }
+        );
+        const purchaseOut = purchaseRes.ok ? ((await purchaseRes.json()) as any) : null;
+        vendorOrderId = purchaseOut?.vendorOrderId ?? null;
+      } catch {
+        vendorOrderId = null;
+      }
+
+      vendorOrders.push({ vendor, vendorOrderId });
     }
 
     const orderRef = db.collection(collections.orders).doc();
@@ -72,10 +90,29 @@ export async function orderRoutes(app: FastifyInstance) {
       paymentProvider: 'cod',
       paymentRef: paymentId,
       pharmacyRef: null,
-      vendor,
-      vendorOrderId
+      vendor: vendorsUsed.length > 1 ? 'multi' : vendorsUsed[0],
+      vendorsUsed,
+      vendorOrders,
+      currency: String(pricing.currency ?? 'INR'),
+      total: Number(pricing.total ?? 0)
     };
     await orderRef.set(order);
+
+    // Create fulfillment requests for vendor dashboard.
+    for (const vo of vendorOrders) {
+      await db.collection(collections.fulfillmentRequests).doc().set({
+        createdAt: Timestamp.now(),
+        orderId: orderRef.id,
+        prescriptionId: body.prescriptionId,
+        vendorId: vo.vendor,
+        status: 'PENDING',
+        items: (itemsByVendor.get(vo.vendor) ?? []).map((it: any) => ({
+          name: String(it.name ?? ''),
+          quantity: Number(it.quantity ?? 1)
+        })),
+        vendorOrderId: vo.vendorOrderId
+      });
+    }
 
     await presRef.update({
       updatedAt: Timestamp.now(),
@@ -87,7 +124,7 @@ export async function orderRoutes(app: FastifyInstance) {
       createdAt: Timestamp.now(),
       prescriptionId: body.prescriptionId,
       action: 'ORDER_PLACED_COD',
-      metadata: { orderId: orderRef.id, vendor, vendorOrderId }
+      metadata: { orderId: orderRef.id, vendorsUsed, vendorOrders }
     });
 
     try {

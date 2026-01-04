@@ -20,6 +20,12 @@ export default function Home() {
           </svg>
           Upload Prescription
         </Link>
+
+        <div className="mt-4">
+          <Link href="/vendor" className="text-sm text-gray-600 hover:text-gray-900">
+            Vendor Dashboard
+          </Link>
+        </div>
       </div>
 
       {/* Features Grid */}

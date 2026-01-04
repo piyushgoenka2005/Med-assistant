@@ -55,9 +55,15 @@ export async function prescriptionRoutes(app: FastifyInstance) {
 
     const extracted = PrescriptionExtractionSchema.parse(extractionDoc?.rawJson);
 
+    const existingCartSnap = await db.collection(collections.carts).doc(id).get();
+    const preferredVendorId = existingCartSnap.exists
+      ? (existingCartSnap.data() as any)?.preferredVendorId
+      : null;
+
     const cart = await buildCartFromExtraction({
       prescriptionId: id,
-      extractionJson: extractionDoc?.rawJson
+      extractionJson: extractionDoc?.rawJson,
+      preferredVendorId: preferredVendorId ?? null
     });
 
     const medicines = extracted.medications.map((m: MedicationExtracted) => ({
@@ -98,6 +104,36 @@ export async function prescriptionRoutes(app: FastifyInstance) {
       prescriptionId: id,
       action: 'PRESCRIPTION_CONFIRMED',
       metadata: null
+    });
+
+    return reply.send({ cart });
+  });
+
+  // Allow user to choose a specific vendor site when multiple are available.
+  app.post('/:id/select-vendor', async (req, reply) => {
+    const id = z.object({ id: z.string() }).parse(req.params).id;
+    const body = z
+      .object({ vendorId: z.enum(['site-a', 'site-b', 'site-c', 'auto']) })
+      .parse(req.body);
+
+    const db = getDb();
+    const presSnap = await db.collection(collections.prescriptions).doc(id).get();
+    if (!presSnap.exists) return reply.notFound('Prescription not found');
+
+    const extractionSnap = await db.collection(collections.extractions).doc(id).get();
+    if (!extractionSnap.exists) return reply.badRequest('Extraction missing');
+    const extractionDoc = extractionSnap.data();
+    if (!extractionDoc?.rawJson || extractionDoc?.status !== 'COMPLETED') {
+      return reply.badRequest('Extraction not completed yet');
+    }
+
+    const preferredVendorId = body.vendorId === 'auto' ? null : body.vendorId;
+    await db.collection(collections.carts).doc(id).set({ preferredVendorId }, { merge: true });
+
+    const cart = await buildCartFromExtraction({
+      prescriptionId: id,
+      extractionJson: extractionDoc?.rawJson,
+      preferredVendorId
     });
 
     return reply.send({ cart });

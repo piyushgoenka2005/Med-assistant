@@ -100,6 +100,8 @@ export async function uploadRoutes(app: FastifyInstance) {
         emailId: emailId || null,
         doctorNames: doctorName ? [doctorName] : [],
         records: [],
+        loyaltyPoints: 120,
+        insuranceCoveragePct: 15,
         paymentType: 'COD',
         paymentId: null,
         blockchain: null

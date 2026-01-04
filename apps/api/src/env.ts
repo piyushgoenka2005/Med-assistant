@@ -79,6 +79,11 @@ const EnvSchema = z.object({
   GOOGLE_PRIVATE_KEY: z.string().optional(),
   GOOGLE_CALENDAR_ID: z.string().optional(),
   PATHWAY_BASE_URL: z.string().optional(),
+  
+  // Routing / distance estimates
+  ROUTING_PROVIDER: z.enum(['mock', 'google', 'mapbox']).optional().default('mock'),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
+  MAPBOX_ACCESS_TOKEN: z.string().optional(),
 
 });
 

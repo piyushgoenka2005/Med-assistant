@@ -91,6 +91,52 @@ export default function PrescriptionPage() {
     }
   }
 
+  async function selectVendor(vendorId: 'site-a' | 'site-b' | 'site-c' | 'auto') {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/v1/prescriptions/${id}/select-vendor`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ vendorId })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Vendor selection failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function purchaseFromVendor(vendorId: 'site-a' | 'site-b' | 'site-c') {
+    setBusy(true);
+    setError(null);
+    setOrder(null);
+    try {
+      const sel = await fetch(`/v1/prescriptions/${id}/select-vendor`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ vendorId })
+      });
+      if (!sel.ok) throw new Error(await sel.text());
+
+      const res = await fetch(`/v1/orders/cod`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prescriptionId: id })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const out = await res.json();
+      setOrder(out.order);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Order failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!data) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -108,6 +154,7 @@ export default function PrescriptionPage() {
   const extraction = data.extraction?.rawJson;
   const cart = data.cart;
   const medications = extraction?.medications || [];
+  const discounts = cart?.pricing?.discounts || [];
 
   const statusColors: Record<string, string> = {
     UPLOADED: 'bg-blue-100 text-blue-800',
@@ -212,6 +259,9 @@ export default function PrescriptionPage() {
               <div>
                 <p className="text-sm text-gray-600">Selected Vendor</p>
                 <p className="font-semibold text-gray-900 uppercase">{cart.vendor}</p>
+                {Array.isArray(cart.vendorsUsed) && cart.vendorsUsed.length > 1 && (
+                  <p className="text-xs text-gray-600 mt-1">Split across: {cart.vendorsUsed.join(', ')}</p>
+                )}
               </div>
               {cart.pricing && (
                 <div className="text-right">
@@ -219,8 +269,25 @@ export default function PrescriptionPage() {
                     {cart.pricing.currency} {cart.pricing.total}
                   </p>
                   <p className="text-xs text-gray-500">
-                    {cart.pricing.source === 'pathway' ? 'Real-time via Pathway' : 'Local pricing'}
+                    {cart.pricing.source === 'dynamic' ? 'Dynamic pricing applied' : 'Pricing'}
                   </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {cart.delivery && (
+            <div className="bg-gray-50 rounded-lg p-4 mb-4 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-600">ETA</span>
+                <span className="text-gray-900">{cart.delivery.etaMinutes} min</span>
+              </div>
+              {cart.delivery.windowStart && cart.delivery.windowEnd && (
+                <div className="flex justify-between mt-1">
+                  <span className="text-gray-600">Delivery window</span>
+                  <span className="text-gray-900">
+                    {new Date(cart.delivery.windowStart).toLocaleTimeString()} – {new Date(cart.delivery.windowEnd).toLocaleTimeString()}
+                  </span>
                 </div>
               )}
             </div>
@@ -228,10 +295,28 @@ export default function PrescriptionPage() {
 
           {cart.pricing && (
             <div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-2 text-sm">
+              {typeof cart.pricing.baseSubtotal === 'number' && cart.pricing.baseSubtotal !== cart.pricing.subtotal && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Base Subtotal</span>
+                  <span className="text-gray-900">{cart.pricing.currency} {cart.pricing.baseSubtotal}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-gray-600">Subtotal</span>
                 <span className="text-gray-900">{cart.pricing.currency} {cart.pricing.subtotal}</span>
               </div>
+
+              {Array.isArray(discounts) && discounts.length > 0 && (
+                <div className="space-y-1">
+                  {discounts.map((d: any, idx: number) => (
+                    <div key={idx} className="flex justify-between text-xs">
+                      <span className="text-gray-600">{d.label || d.code}</span>
+                      <span className="text-gray-900">- {cart.pricing.currency} {d.amount}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="flex justify-between">
                 <span className="text-gray-600">Delivery Fee</span>
                 <span className="text-gray-900">{cart.pricing.currency} {cart.pricing.deliveryFee}</span>
@@ -247,10 +332,39 @@ export default function PrescriptionPage() {
             <details>
               <summary className="text-sm text-gray-600 cursor-pointer hover:text-gray-900">Compare Vendor Prices</summary>
               <div className="mt-2 space-y-2">
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void selectVendor('auto')}
+                    disabled={busy}
+                    className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                  >
+                    Auto select
+                  </button>
+                </div>
                 {Object.entries(cart.totalsByVendor).map(([vendor, total]: [string, any]) => (
                   <div key={vendor} className="flex justify-between text-sm bg-gray-50 rounded p-2">
                     <span className="uppercase font-medium">{vendor}</span>
-                    <span>{Number.isFinite(total) ? `${cart.pricing?.currency || 'INR'} ${total}` : 'Unavailable'}</span>
+                    <div className="flex items-center gap-3">
+                      <span>
+                        {Number.isFinite(total)
+                          ? `${cart.pricing?.currency || 'INR'} ${total}`
+                          : 'Unavailable'}
+                        {Number.isFinite(total) && typeof cart?.delivery?.etaByVendor?.[vendor] === 'number' && (
+                          <span className="text-xs text-gray-600"> · {cart.delivery.etaByVendor[vendor]} min</span>
+                        )}
+                      </span>
+                      {Number.isFinite(total) && ['site-a', 'site-b', 'site-c'].includes(vendor) && (
+                        <button
+                          type="button"
+                          onClick={() => void purchaseFromVendor(vendor as any)}
+                          disabled={busy}
+                          className="text-xs px-2 py-1 rounded bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          Buy
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
