@@ -25,6 +25,9 @@ export type PricingContext = {
   baseSubtotal: number;
   deliveryFee: number;
   now: Date;
+  // If true, persist loyalty point deductions to Firestore.
+  // Use false for previews/simulations.
+  commit?: boolean;
 };
 
 function clampMoney(n: number) {
@@ -135,7 +138,7 @@ export async function applyDynamicPricing(input: PricingContext): Promise<Pricin
     discounts.push({ code: 'LOYALTY', label: 'Loyalty points', amount: clampMoney(loyaltyToUse) });
     runningSubtotal = clampMoney(runningSubtotal - loyaltyToUse);
 
-    if (customerId) {
+    if (customerId && input.commit) {
       await db.collection(collections.customers).doc(customerId).set(
         {
           loyaltyPoints: loyaltyPoints - loyaltyToUse,

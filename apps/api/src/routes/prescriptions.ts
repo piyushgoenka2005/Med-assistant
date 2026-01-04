@@ -63,7 +63,8 @@ export async function prescriptionRoutes(app: FastifyInstance) {
     const cart = await buildCartFromExtraction({
       prescriptionId: id,
       extractionJson: extractionDoc?.rawJson,
-      preferredVendorId: preferredVendorId ?? null
+      preferredVendorId: preferredVendorId ?? null,
+      commitPricing: false
     });
 
     const medicines = extracted.medications.map((m: MedicationExtracted) => ({
@@ -133,7 +134,8 @@ export async function prescriptionRoutes(app: FastifyInstance) {
     const cart = await buildCartFromExtraction({
       prescriptionId: id,
       extractionJson: extractionDoc?.rawJson,
-      preferredVendorId
+      preferredVendorId,
+      commitPricing: false
     });
 
     return reply.send({ cart });

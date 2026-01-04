@@ -27,7 +27,8 @@ export async function orderRoutes(app: FastifyInstance) {
     const refreshedCart = await buildCartFromExtraction({
       prescriptionId: body.prescriptionId,
       extractionJson: extractionDoc?.rawJson,
-      preferredVendorId: preferredVendorId ?? null
+      preferredVendorId: preferredVendorId ?? null,
+      commitPricing: true
     });
 
     if (refreshedCart?.status !== 'CONFIRMED') return reply.badRequest('Cart not confirmed');

@@ -4,6 +4,7 @@ import { collections } from '../db/collections.js';
 import type { VendorId } from './pricing.js';
 import { applyDynamicPricing } from './dynamicPricing.js';
 import { DEFAULT_VENDOR_IDS, ensureVendorSeed, inventoryDocId } from './vendorData.js';
+import { quoteViaPathway } from '../integrations/pathway.js';
 
 function candidateInventoryNames(m: MedicationExtracted): string[] {
   const raw = String(m.name ?? '').trim();
@@ -53,6 +54,8 @@ export async function buildCartFromExtraction(input: {
   prescriptionId: string;
   extractionJson: unknown;
   preferredVendorId?: string | null;
+  // When true, persist loyalty point usage (used at order time).
+  commitPricing?: boolean;
 }) {
   const extraction = PrescriptionExtractionSchema.parse(input.extractionJson);
 
@@ -89,6 +92,8 @@ export async function buildCartFromExtraction(input: {
   }
 
   const perVendorTotalIfAll: Record<string, number> = {};
+  const perVendorSubtotalIfAll: Record<string, number> = {};
+  const perVendorDeliveryFee: Record<string, number> = {};
   for (const v of vendors) {
     const vendor = vendorById.get(String(v));
     const deliveryFee = Number(vendor?.baseDeliveryFee ?? 0);
@@ -103,6 +108,8 @@ export async function buildCartFromExtraction(input: {
       }
       subtotal += Number(inv.unitPrice ?? 0) * qty;
     }
+    perVendorDeliveryFee[String(v)] = deliveryFee;
+    perVendorSubtotalIfAll[String(v)] = subtotal;
     perVendorTotalIfAll[String(v)] = ok ? subtotal + deliveryFee : Number.POSITIVE_INFINITY;
   }
 
@@ -227,14 +234,48 @@ export async function buildCartFromExtraction(input: {
     currency,
     baseSubtotal,
     deliveryFee,
-    now
+    now,
+    commit: Boolean(input.commitPricing)
   });
 
+  // Pathway integration: compute per-vendor totals via `/quote` (real-time totals) when configured.
+  const vendorIdsForCompare = vendors.map(String);
+  const totalsByVendorEntries = await Promise.all(
+    vendorIdsForCompare.map(async (vendorId) => {
+      const localTotal = perVendorTotalIfAll[vendorId];
+      if (!Number.isFinite(localTotal)) return [vendorId, Number.POSITIVE_INFINITY] as const;
+
+      const quoted = await quoteViaPathway({
+        selectedVendor: vendorId,
+        subtotal: perVendorSubtotalIfAll[vendorId] ?? 0,
+        deliveryFee: perVendorDeliveryFee[vendorId] ?? 0,
+        currency
+      });
+
+      return [vendorId, Number.isFinite(quoted.total) ? quoted.total : localTotal] as const;
+    })
+  );
+
   const totalsByVendor: Record<string, number> = {
-    'site-a': perVendorTotalIfAll['site-a'],
-    'site-b': perVendorTotalIfAll['site-b'],
-    'site-c': perVendorTotalIfAll['site-c']
+    'site-a': totalsByVendorEntries.find((e) => e[0] === 'site-a')?.[1] ?? perVendorTotalIfAll['site-a'],
+    'site-b': totalsByVendorEntries.find((e) => e[0] === 'site-b')?.[1] ?? perVendorTotalIfAll['site-b'],
+    'site-c': totalsByVendorEntries.find((e) => e[0] === 'site-c')?.[1] ?? perVendorTotalIfAll['site-c']
   };
+
+  // For the selected cart, also apply Pathway quote (single-vendor only) to reflect real-time totals.
+  const selectedVendorForQuote = chosenVendorsUsed.length === 1 ? String(chosenVendorsUsed[0]) : null;
+  const selectedQuote = selectedVendorForQuote
+    ? await quoteViaPathway({
+        selectedVendor: selectedVendorForQuote,
+        subtotal: pricing.subtotalAfterDiscounts,
+        deliveryFee: pricing.deliveryFee,
+        currency
+      })
+    : null;
+
+  const finalDeliveryFee = selectedQuote?.source === 'pathway' ? selectedQuote.deliveryFee : pricing.deliveryFee;
+  const finalTotal = selectedQuote?.source === 'pathway' ? selectedQuote.total : pricing.total;
+  const finalSource = selectedQuote?.source === 'pathway' ? 'pathway' : pricing.source;
 
   const cartRef = db.collection(collections.carts).doc(input.prescriptionId);
   const payload = {
@@ -250,10 +291,10 @@ export async function buildCartFromExtraction(input: {
       baseSubtotal: pricing.baseSubtotal,
       subtotal: pricing.subtotalAfterDiscounts,
       discounts: pricing.discounts,
-      deliveryFee: pricing.deliveryFee,
-      total: pricing.total,
+      deliveryFee: finalDeliveryFee,
+      total: finalTotal,
       loyaltyPointsUsed: pricing.loyaltyPointsUsed,
-      source: pricing.source
+      source: finalSource
     },
     delivery: {
       etaMinutes: overallEtaMinutes,
